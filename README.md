@@ -55,14 +55,13 @@ KOTのカスタムデータ項目を使用し、以下の計算式で「総労�
     * `google-cloud-bigquery`
     * `jpholiday`
 
-インストールコマンド:
-```bash
-pip install requests pandas google-cloud-bigquery jpholiday
+
 
 
 ## ⚙️ セットアップ (Setup)
 
 本スクリプトは、機密情報をコード内に保持せず、環境変数から読み込みます。実行環境（ローカルまたはサーバー）にて以下の環境変数を設定してください。
+
 
 | 環境変数名 | 説明 |
 | :--- | :--- |
@@ -73,9 +72,8 @@ pip install requests pandas google-cloud-bigquery jpholiday
 | `BQ_DATASET` | BigQuery データセット名 (例: `roumu_automation`) |
 | `GCP_KEY_PATH` | サービスアカウントキー（JSON）へのパス (例: `credentials.json`) |
 
-### 実行方法
-```bash
-python patch.py
+
+
 
 ### BigQuery テーブル定義
 本システムで作成・更新される3つのテーブルのスキーマ定義です。
