@@ -14,7 +14,7 @@ SMARTHR_TOKEN = os.getenv("SMARTHR_TOKEN", "").strip()
 SMARTHR_SUBDOMAIN = os.getenv("SMARTHR_SUBDOMAIN", "")
 GCP_KEY_PATH = os.getenv("GCP_KEY_PATH", "credentials.json")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
-BQ_DATASET = "roumu_automation_1029"
+BQ_DATASET = os.getenv("BQ_DATASET", "")
 
 # テーブルID
 TABLE_SMARTHR = f"{GCP_PROJECT_ID}.{BQ_DATASET}.smarthr_employees"
