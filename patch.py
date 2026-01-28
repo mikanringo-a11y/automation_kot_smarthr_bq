@@ -8,7 +8,9 @@ import calendar
 import jpholiday
 from datetime import datetime, date
 
-
+# ==========================================
+# 1. 設定・認証情報 (環境変数から取得)
+# ==========================================
 KOT_TOKEN = os.getenv("KOT_TOKEN", "").strip()
 SMARTHR_TOKEN = os.getenv("SMARTHR_TOKEN", "").strip()
 SMARTHR_SUBDOMAIN = os.getenv("SMARTHR_SUBDOMAIN", "")
@@ -24,6 +26,10 @@ TABLE_KOT_MONTHLY = f"{GCP_PROJECT_ID}.{BQ_DATASET}.kot_monthly_summary"
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCP_KEY_PATH
 
 TARGET_MONTH = "2025-11"
+
+# ==========================================
+# 2. SmartHR データ取得 & 整形
+# ==========================================
 def fetch_smarthr_data():
     all_employees = []
     url = f"https://{SMARTHR_SUBDOMAIN}.smarthr.jp/api/v1/crews?per_page=100"
@@ -54,7 +60,6 @@ def process_smarthr_data(json_data):
         if depts and depts[0] is not None:
             dept_name = depts[0].get("name")
         
-        
         processed_rows.append({
             "emp_code": emp.get("emp_code"),
             "full_name": f"{emp.get('business_last_name') or ''} {emp.get('business_first_name') or ''}".strip(),
@@ -68,51 +73,42 @@ def process_smarthr_data(json_data):
 # ==========================================
 
 def fetch_kot_daily_detailed(target_month):
-    """日次データを一括取得する (修正版)"""
+    """日次データを一括取得する"""
     year, month = map(int, target_month.split('-'))
     last_day = calendar.monthrange(year, month)[1]
     
-    # URLはベースのみを記述（末尾に日付やスラッシュを入れない）
     url = "https://api.kingtime.jp/v1.0/daily-workings"
     headers = {"Authorization": f"Bearer {KOT_TOKEN}"}
     
-    
-    # パラメータは辞書形式で渡す
     params = {
         "start": f"{target_month}-01",
         "end": f"{target_month}-{last_day}",
-        "additionalFields": "currentDateEmployee" # 日次専用フィールド
+        "additionalFields": "currentDateEmployee"
     }
     
     print(f"KOT日次APIリクエスト中: {url} ({params['start']}～{params['end']})")
     
     response = requests.get(url, headers=headers, params=params)
     
-    # 403エラー時に詳細を表示するデバッグ処理
     if response.status_code != 200:
         print(f"--- KOT API Error ---")
         print(f"Status: {response.status_code}")
-        print(f"Reason: {response.text}") # ここに具体的なエラー理由が出ます
+        print(f"Reason: {response.text}")
         
     response.raise_for_status()
     return response.json()
 
 def process_kot_daily_detailed(json_data, target_month):
-    """
-    日次データを整形：
-    裁量労働・管理職の集計用に実労働時間と雇用形態コードを保持する。
-    """
+    """日次データを整形"""
     processed_rows = []
     for day_data in json_data:
         date = day_data.get('date')
         for rec in day_data.get('dailyWorkings', []):
-            # 従業員情報を取得
             emp = rec.get('currentDateEmployee') or rec.get('currentEmployee') or {}
             emp_code = emp.get('code')
             if not emp_code:
                 continue
 
-            # 実労働時間 (totalWork) と 雇用形態コード (typeCode)
             total_work = rec.get('totalWork', 0)
             type_code = str(emp.get('typeCode', ''))
 
@@ -121,19 +117,16 @@ def process_kot_daily_detailed(json_data, target_month):
                 "work_date": date,
                 "type_code": type_code,
                 "overtime_minutes": int(rec.get('overtime', 0)),
-                "total_work_minutes": int(total_work)  # 裁量・管理用
+                "total_work_minutes": int(total_work)
             })
     return processed_rows
 
 def calculate_true_standard_minutes(target_month_str, daily_working_hours=8):
-    """
-    対象月の本来あるべき基準時間（分）を計算する。
-    (全日数 - 土日 - 祝日 - 年末年始休暇) * 480分
-    """
+    """対象月の本来あるべき基準時間（分）を計算する"""
     target_date = datetime.strptime(target_month_str, '%Y-%m')
     year, month = target_date.year, target_date.month
     
-    # 会社独自の休日リスト (年末年始 12/29〜1/3 をデフォルト設定)
+    # 会社独自の休日リスト (年末年始 12/29〜1/3)
     company_holidays = [
         date(2025, 12, 29), date(2025, 12, 30), date(2025, 12, 31),
         date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)
@@ -144,7 +137,6 @@ def calculate_true_standard_minutes(target_month_str, daily_working_hours=8):
     
     for day in range(1, num_days + 1):
         curr_date = date(year, month, day)
-        # 土日・祝日・会社休日を除外
         if curr_date.weekday() >= 5 or jpholiday.is_holiday(curr_date) or curr_date in company_holidays:
             continue
         work_days += 1
@@ -152,7 +144,8 @@ def calculate_true_standard_minutes(target_month_str, daily_working_hours=8):
     return work_days * daily_working_hours * 60
 
 def fetch_kot_monthly_summary(target_month, daily_raw_data):
-    # 基準時間を計算 (144:00など)
+    """月次データ取得＆計算ロジック適用"""
+    # 基準時間を計算
     true_standard_min = calculate_true_standard_minutes(target_month)
     
     # 従業員マスタ作成
@@ -183,11 +176,11 @@ def fetch_kot_monthly_summary(target_month, daily_raw_data):
 
         # --- 全区分共通：実労働合計の算出 ---
         custom_items = reg.get('customMonthlyWorkings', [])
-        # 001(所定/基準内) と 003(残業/超過分) だけを足す（002は重複のため無視）
+        # 001(所定/基準内) と 003(残業/超過分) を足す（002は重複のため無視）
         c001 = next((float(item['calculationResult']) for item in custom_items if item['code'] == '001'), 0)
         c003 = next((float(item['calculationResult']) for item in custom_items if item['code'] == '003'), 0)
         
-        # 真の実労働合計 (徳山様なら 144:00 + 8:13 = 152:13)
+        # 真の実労働合計
         total_actual_work_min = int(c001 + c003)
 
         # 判定用
@@ -203,7 +196,7 @@ def fetch_kot_monthly_summary(target_month, daily_raw_data):
         holiday_work_min = (int(l_h.get('normal', 0)) + int(l_h.get('extra', 0)) + 
                             int(g_h.get('normal', 0)) + int(g_h.get('extra', 0)))
 
-        # 36協定用 (AV, AW, AX)
+        # 36協定用項目 (AV, AW, AX)
         weekday_work_min = total_actual_work_min - holiday_work_min
         weekday_excess_min = max(0, weekday_work_min - true_standard_min)
         total_excess_min = weekday_excess_min + holiday_work_min
@@ -218,7 +211,7 @@ def fetch_kot_monthly_summary(target_month, daily_raw_data):
             overtime_val = int(reg.get('nightOvertime', 0))
             assigned_val = total_actual_work_min - overtime_val
         else:
-            # 固定時間制: 003(残業) の値をそのまま採用（あるいはKOT標準値）
+            # 固定時間制: 003(残業) または KOT標準の残業時間を採用
             overtime_val = int(c003) if c003 > 0 else int(reg.get('overtime', 0))
             assigned_val = total_actual_work_min - overtime_val
 
@@ -280,25 +273,22 @@ def fetch_kot_monthly_summary(target_month, daily_raw_data):
             "thirty_six_holiday_work": holiday_work_min,
         })
     return processed_rows
+
 # ==========================================
 # 4. BigQuery ロード処理
 # ==========================================
-def load_to_bq(rows, table_id, schema):  # 第2引数を 'table_id' にします
+def load_to_bq(rows, table_id, schema):
     if not rows:
         print(f"データが空のためロードをスキップします。")
         return
     
-    # clientを初期化（project指定は任意ですが、認証が通っていればこれだけでOK）
     client = bigquery.Client()
     
-    # すでに TABLE_SMARTHR 等の変数にプロジェクト名が含まれているので、
-    # ここでは加工せず、そのまま table_id を使用します
     job_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_TRUNCATE",
         schema=schema
     )
     
-    # ここで引数の table_id を使います
     job = client.load_table_from_json(rows, table_id, job_config=job_config)
     job.result()
     print(f"ロード完了: {table_id} ({job.output_rows} 行)")
@@ -321,13 +311,12 @@ if __name__ == "__main__":
     # B. KOT 日次処理
     daily_raw = fetch_kot_daily_detailed(TARGET_MONTH)
     daily_processed = process_kot_daily_detailed(daily_raw, TARGET_MONTH)
-    # B. KOT 日次処理用のスキーマ
     daily_schema = [
         bigquery.SchemaField("emp_code", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("work_date", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("type_code", "STRING", mode="NULLABLE"),     # typeCodeでの判定用
+        bigquery.SchemaField("type_code", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("overtime_minutes", "INTEGER", mode="NULLABLE"),
-        bigquery.SchemaField("total_work_minutes", "INTEGER", mode="NULLABLE"), # 実労働
+        bigquery.SchemaField("total_work_minutes", "INTEGER", mode="NULLABLE"),
     ]
     load_to_bq(daily_processed, TABLE_KOT_DAILY, daily_schema)
 
@@ -335,58 +324,58 @@ if __name__ == "__main__":
     monthly_processed = fetch_kot_monthly_summary(TARGET_MONTH, daily_raw)
    
     monthly_schema = [
-    bigquery.SchemaField("emp_code", "STRING", mode="REQUIRED"),
-    bigquery.SchemaField("user_name", "STRING", mode="NULLABLE"),
-    bigquery.SchemaField("employment_type", "STRING", mode="NULLABLE"),
-    bigquery.SchemaField("target_month", "STRING", mode="REQUIRED"),
-    bigquery.SchemaField("standard_labor_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("assigned_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("unassigned_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("overtime_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("premium_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("night_assigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("night_unassigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("night_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("premium_night_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_assigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_unassigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_night_assigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_night_unassigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("legal_h_night_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_assigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_unassigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_night_assigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_night_unassigned", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("gen_h_night_overtime", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("late_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("early_leave_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("break_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("interval_shortage_count", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("total_working_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("late_count", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("early_leave_count", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("workingday_count", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("absentday_count", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("daikyu_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("yuq_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("keicho_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("summer_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("special_paid_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("seiri_paid_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("kango_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("kaigo_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("shukko_special_days", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("regarding_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("kango_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("kaigo_minutes", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("shukko_special_minutes", "INTEGER", mode="NULLABLE"),
-    # 【36協定・裁量管理用項目】
-    bigquery.SchemaField("thirty_six_total_excess", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("thirty_six_weekday_excess", "INTEGER", mode="NULLABLE"),
-    bigquery.SchemaField("thirty_six_holiday_work", "INTEGER", mode="NULLABLE"),
-]
+        bigquery.SchemaField("emp_code", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("user_name", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("employment_type", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("target_month", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("standard_labor_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("assigned_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("unassigned_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("overtime_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("premium_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("night_assigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("night_unassigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("night_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("premium_night_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_assigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_unassigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_night_assigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_night_unassigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("legal_h_night_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_assigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_unassigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_night_assigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_night_unassigned", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("gen_h_night_overtime", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("late_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("early_leave_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("break_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("interval_shortage_count", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("total_working_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("late_count", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("early_leave_count", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("workingday_count", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("absentday_count", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("daikyu_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("yuq_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("keicho_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("summer_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("special_paid_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("seiri_paid_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("kango_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("kaigo_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("shukko_special_days", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("regarding_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("kango_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("kaigo_minutes", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("shukko_special_minutes", "INTEGER", mode="NULLABLE"),
+        # 【36協定・裁量管理用項目】
+        bigquery.SchemaField("thirty_six_total_excess", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("thirty_six_weekday_excess", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("thirty_six_holiday_work", "INTEGER", mode="NULLABLE"),
+    ]
     load_to_bq(monthly_processed, TABLE_KOT_MONTHLY, monthly_schema)
 
     print(f"--- 全工程が完了しました ({TARGET_MONTH}分) ---")
