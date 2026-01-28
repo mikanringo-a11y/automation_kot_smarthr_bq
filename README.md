@@ -80,43 +80,54 @@ python patch.py
 ### BigQuery テーブル定義
 本システムで作成・更新される3つのテーブルのスキーマ定義です。
 
-1. kot_monthly_summary (月次集計テーブル)
-メインとなる集計テーブルです。雇用区分ごとの計算ロジックが適用された後の数値が格納されます。
-カラム名,データ型,説明
-emp_code,STRING,従業員コード (REQUIRED)
-user_name,STRING,従業員名
-employment_type,STRING,雇用区分名
-target_month,STRING,対象月度 (YYYY-MM) (REQUIRED)
-standard_labor_minutes,INTEGER,月間基準労働時間（平日数×8h）
-assigned_minutes,INTEGER,所定労働時間（基準内）
-overtime_minutes,INTEGER,残業時間（法定超過分）
-total_working_minutes,INTEGER,実労働合計時間（カスタム項目001+003）
-thirty_six_total_excess,INTEGER,【36協定】 法定超過時間合計 (AV列相当)
-thirty_six_weekday_excess,INTEGER,【36協定】 平日法定超過時間 (AW列相当)
-thirty_six_holiday_work,INTEGER,【36協定】 休日実労働時間 (AX列相当)
-night_overtime,INTEGER,深夜残業時間
-workingday_count,FLOAT,総出勤日数
-absentday_count,FLOAT,欠勤日数
-yuq_days,FLOAT,有休取得日数
-regarding_minutes,INTEGER,休暇みなし勤務時間
+## 📊 BigQuery テーブル定義
 
-2. kot_daily_attendance_detail (日次勤怠詳細テーブル)
+本システムで作成・更新される3つのテーブルのスキーマ定義です。
+
+### 1. `kot_monthly_summary` (月次集計テーブル)
+
+メインとなる集計テーブルです。雇用区分ごとの計算ロジックが適用された後の数値が格納されます。
+
+| カラム名 | データ型 | 説明 |
+| :--- | :--- | :--- |
+| `emp_code` | STRING | 従業員コード (REQUIRED) |
+| `user_name` | STRING | 従業員名 |
+| `employment_type` | STRING | 雇用区分名 |
+| `target_month` | STRING | 対象月度 (YYYY-MM) (REQUIRED) |
+| `standard_labor_minutes` | INTEGER | 月間基準労働時間（平日数×8h） |
+| `assigned_minutes` | INTEGER | 所定労働時間（基準内） |
+| `overtime_minutes` | INTEGER | 残業時間（法定超過分） |
+| `total_working_minutes` | INTEGER | 実労働合計時間（カスタム項目001+003） |
+| `thirty_six_total_excess` | INTEGER | **【36協定】** 法定超過時間合計 |
+| `thirty_six_weekday_excess` | INTEGER | **【36協定】** 平日法定超過時間 |
+| `thirty_six_holiday_work` | INTEGER | **【36協定】** 休日実労働時間 |
+| `night_overtime` | INTEGER | 深夜残業時間 |
+| `workingday_count` | FLOAT | 総出勤日数 |
+| `absentday_count` | FLOAT | 欠勤日数 |
+| `yuq_days` | FLOAT | 有休取得日数 |
+| `regarding_minutes` | INTEGER | 休暇みなし勤務時間 |
+
+### 2. `kot_daily_attendance_detail` (日次勤怠詳細テーブル)
+
 KOTから取得した日ごとの打刻・労働データです。
 
-カラム名,データ型,説明
-emp_code,STRING,従業員コード (REQUIRED)
-work_date,STRING,勤務日 (YYYY-MM-DD) (REQUIRED)
-type_code,STRING,雇用形態コード（判定用）
-overtime_minutes,INTEGER,その日の残業時間
-total_work_minutes,INTEGER,その日の実労働時間
+| カラム名 | データ型 | 説明 |
+| :--- | :--- | :--- |
+| `emp_code` | STRING | 従業員コード (REQUIRED) |
+| `work_date` | STRING | 勤務日 (YYYY-MM-DD) (REQUIRED) |
+| `type_code` | STRING | 雇用形態コード（判定用） |
+| `overtime_minutes` | INTEGER | その日の残業時間 |
+| `total_work_minutes` | INTEGER | その日の実労働時間 |
 
-3. smarthr_employees (従業員マスタテーブル)
+### 3. `smarthr_employees` (従業員マスタテーブル)
+
 SmartHRから取得した従業員の基本属性データです。
 
-カラム名,データ型,説明
-emp_code,STRING,従業員コード
-full_name,STRING,氏名
-employment_type,STRING,雇用形態（正社員、アルバイト等）
-dept_name,STRING,所属部署名
+| カラム名 | データ型 | 説明 |
+| :--- | :--- | :--- |
+| `emp_code` | STRING | 従業員コード |
+| `full_name` | STRING | 氏名 |
+| `employment_type` | STRING | 雇用形態（正社員、アルバイト等） |
+| `dept_name` | STRING | 所属部署名 |
 
 Last Updated: 2026-1-28
